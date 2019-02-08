@@ -22,6 +22,8 @@ COPY src/ /opt/app/src/
 COPY bin/ /opt/app/bin/
 COPY Pipfile /opt/app/
 
+RUN chmod +x bin/start-mediaocean-etl.sh
+
 
 ARG APP_USER=spark
 RUN useradd $APP_USER
