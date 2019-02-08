@@ -7,6 +7,8 @@ RUN python3.6 -m pip install --upgrade pip &&\
     pip3 install --upgrade setuptools &&\
     pip3 install --trusted-host pypi.python.org pipenv
 
+ENV PIPENV_VENV_IN_PROJECT 1
+
 WORKDIR /opt/app
 COPY dist/ /opt/app/dist/
 COPY setup.py /opt/app
