@@ -7,7 +7,7 @@ name = "pypi"
 python_version = '3.6'
 
 [packages]
-vampy-util = "==1.1.1"
+vampy_util = "==1.1.14"
 pyspark = "==2.2.1"
 "boto3" = "==1.5.29"
 botocore = "==1.8.43"

@@ -43,7 +43,7 @@ setup(
     # For an analysis of "install_requires" vs pip's requirements files see:
     # https://packaging.python.org/en/latest/requirements.html
     install_requires=[
-        "vampy-util==1.1.1",
+        "vampy_util==1.1.1",
         "pyspark==2.2.1",
         "boto3==1.5.29",
         "botocore==1.8.43",

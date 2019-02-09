@@ -6,11 +6,12 @@ import functools
 import argparse
 import re
 import os
+from pyspark.sql import SparkSession
+from pyspark import SparkConf
 from pyspark.sql import functions as F
 from pyspark.sql import DataFrame
 from pyspark.sql.types import *
 from pyspark.sql.window import Window
-from util import spark
 from urllib.parse import urlparse
 
 url_env = os.environ['DATABASE_API_CONNECTION_MEDIAOCEAN']
@@ -21,7 +22,104 @@ properties = {
     "user": parsed_config.username,
     "password": parsed_config.password
 }
-spark_session = spark.get_spark_session(
+
+def get_spark_session(
+        name='template',
+        spark_home="/opt/spark",
+        python_path="/opt/conda/bin/python",
+        max_cores=10,
+        memory=12,
+        executor_cores=5,
+        storageFraction=.5,
+        memoryFraction=.6,
+        parallelism=1024,
+        memory_per_core=3,
+        ip = "spark-dev-master-001.prod.dc3",
+        dynamic_overwrite=True
+    ):
+
+    """
+    Initialize a spark session.
+    Arguments:
+        name: string
+            Spark application name
+        max_cores: int
+            maximum number of cpu cores to allocate to the
+            application (see spark.cores.max). This should be set to a
+            multiple of 10 for best utilization of the dc3 cluster when
+            multiple applications are running.
+        memory: int
+            heap memory
+        executor_cores: int
+            number of cores for each executor
+        storageFraction: float
+            storage fraction for both heap and off-heap memory
+        memoryFraction: float
+            Fraction of (heap space - 300MB) used for execution and storage
+        parallelism: int
+            would set 'shuffle.partitions' and 'default.parallelism'
+        memory_per_core: int
+            amount of memory avaiable to each core in GB(total memory of machine/number of cores)
+        ip: string
+            the url of the spark master
+    """
+
+    print("spark initiating ...")
+
+    total_memory = int(memory_per_core * executor_cores)
+    off_heap = int(total_memory - memory)
+
+    os.environ["SPARK_HOME"] = spark_home
+    os.environ["PYSPARK_PYTHON"] = python_path
+
+    if memory > total_memory:
+        print("heap memory is out of bound")
+        raise ValueError(f"memory(={memory}) has to be smaller than {total_memory}")
+
+    executorFlags =   ["-XX:+UseParallelGC" ,
+      "-XX:+HeapDumpOnOutOfMemoryError" ,
+      "-XX:HeapDumpPath=/scratch1/heapdumps/" ,
+      "-XX:+PrintClassHistogram" ]
+
+
+    conf = SparkConf().setAppName(name)
+    conf.set("spark.ui.showConsoleProgress", "true")
+    conf.set("spark.executor.cores", executor_cores)
+    conf.set('spark.cores.max', max_cores)
+    conf.set("spark.default.parallelism", str(parallelism))
+    conf.set("spark.kryoserializer.buffer.max", "2040m")
+    conf.set('spark.executor.memory','{}g'.format(memory))
+    conf.set('spark.driver.memory','32g')
+    conf.set('spark.driver.maxResultSize', '16g')
+    conf.set("spark.rdd.compress", "true")
+    conf.set("spark.executor.extraJavaOptions", " ".join(executorFlags))
+    conf.set("spark.shuffle.io.preferDirectBufs", "true")
+    conf.set("spark.rpc.io.preferDirectBufs", "true")
+    conf.set("spark.sql.shuffle.partitions", str(parallelism))
+    conf.set("spark.memory.storageFraction", storageFraction)
+    conf.set("spark.memory.fraction", memoryFraction)
+    conf.set("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
+    conf.set("spark.jars", "/home/spark/jars/postgresql-42.2.2.jar")
+    if dynamic_overwrite:
+        conf.set("spark.sql.sources.partitionOverwriteMode","DYNAMIC")
+
+    if off_heap > 0:
+        print(f"heap is on with {off_heap}GB")
+        conf.set('spark.memory.offHeap.enabled', 'true')
+        conf.set('spark.memory.offHeap.size',  off_heap * 1024 * 1024 * 1024)
+
+    spark = (
+        SparkSession.builder
+        .master("spark://{}:7077".format(ip))
+        .config(conf = conf)
+        .enableHiveSupport()
+        .getOrCreate()
+    )
+
+    return spark
+
+
+spark_session = get_spark_session(
     name="ingest_from_SFTP",
     max_cores=64,
     memory_per_core=3.75,

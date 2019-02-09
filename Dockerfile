@@ -1,5 +1,12 @@
 FROM videoamp/electroline-2.2.1:latest
 
+
+RUN yum install -y wget
+RUN mkdir -p /home/spark/jars
+ENV POST_URL https://jdbc.postgresql.org/download/postgresql-42.2.2.jar
+RUN wget ${POST_URL}
+RUN mv postgresql-42.2.2.jar /home/spark/jars/postgresql-42.2.2.jar
+
 RUN yum install -y python36u python36u-libs python36u-devel python36u-pip
 
 RUN yum install -y python36u python36u-libs python36u-devel python36u-pip
@@ -15,7 +22,7 @@ COPY setup.py /opt/app
 COPY setup.cfg /opt/app
 
 RUN rm dist/vampy_mediaocean*.whl
-RUN pipenv run pip install --find-links dist .
+RUN pipenv --three run pip install --find-links dist .
 
 
 ENV SPARK_HOME /opt/spark
