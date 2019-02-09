@@ -16,7 +16,7 @@ from urllib.parse import urlparse
 
 url_env = os.environ['DATABASE_API_CONNECTION_MEDIAOCEAN']
 parsed_config = urlparse(url_env)
-url = f"jdbc:postgresql://{parsed_config.hostname}:{parsed_config.port}{parsed_config.path}"
+url = f"jdbc:postgresql://{parsed_config.hostname}:{parsed_config.port}{parsed_config.path.strip()}"
 properties = {
     "driver": "org.postgresql.Driver",
     "user": parsed_config.username,
