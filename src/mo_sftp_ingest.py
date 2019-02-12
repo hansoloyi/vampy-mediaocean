@@ -163,7 +163,7 @@ def run_ingest(files, feed_type):
 
 
 def create_tenant_df():
-    return (read_df_from_postgres("mediaocean.tenant", 2)
+    return (read_df_from_postgres("mediaocean.tenant")
             .withColumnRenamed("id", "tenant_id")
             .withColumnRenamed("mo_id", "tenant_mo_id"))
 
@@ -197,7 +197,7 @@ def run_advertiser_feed(advertiser_files):
     write_df_to_postgres(client_df, "mediaocean.client")
 
     # -- runs product table --
-    client_read_df = read_df_from_postgres("mediaocean.client", 5).withColumnRenamed("id", "client_id")
+    client_read_df = read_df_from_postgres("mediaocean.client", 2).withColumnRenamed("id", "client_id")
     product_df = joined_df.select("advertiser_id", "brand_id", "brand_name", "extract_datetime").distinct()
 
     pw = create_window(["tenant_id", "brand_id"])
@@ -274,7 +274,7 @@ def run_daypart_feed(daypart_files):
         missing_tenant_files = "\n".join([str(row.tenant_mo_id) for row in non_joined_tenant.collect()])
         raise Exception(f"Tenants missing: {missing_tenant_files}")
 
-    client_read_df = read_df_from_postgres("mediaocean.client", 5).withColumnRenamed("id", "client_id").withColumnRenamed("mo_id", "client_mo_id")
+    client_read_df = read_df_from_postgres("mediaocean.client", 1).withColumnRenamed("id", "client_id").withColumnRenamed("mo_id", "client_mo_id")
     joined_df = daypart_df.join(client_read_df, F.col("advertiser_id") == F.col("client_mo_id"), "left_outer")
     w = create_window(window_cols)
     daypart_df_final = (joined_df
@@ -288,30 +288,49 @@ def run_daypart_feed(daypart_files):
 
 
 def run_program_feed(program_files):
-    print('...program...')
     program_df = create_program_df_from_sftp_file(program_files)
     program_cols = ["tenant_id", "network_id", "mo_id", "name", "media", "start_date", "end_date"]
     window_cols = ["mo_id", "tenant_id"]
+    print('...program...')
 
-    tenants_df = create_tenant_df()
-    network_df = (read_df_from_postgres("mediaocean.network", 5)
-                  .withColumnRenamed("id", "network_id")
-                  .withColumnRenamed("mo_id", "network_mo_id")
-                  .select("network_id", "network_mo_id"))
-    tenant_join_df = program_df.join(tenants_df, F.col("tenant") == F.col("tenant_mo_id"), "left_outer")
-
-    non_joined_tenant = tenant_join_df.filter(F.col("tenant_id").isNull()).select("tenant").distinct()
-    if len(non_joined_tenant.take(1)) > 0:
-        missing_tenant_files = "\n".join([str(row.tenant_mo_id) for row in non_joined_tenant.collect()])
-        raise Exception(f"Tenants missing: {missing_tenant_files}")
-    network_join_df = tenant_join_df.join(network_df, F.col("program_network_id") == F.col("network_mo_id"), "left_outer")
-    # non_join_network = network_join_df.filter(F.col("network_id").isNull()).select("program_network_id").distinct()
-    # if len(non_join_network.take(1)) > 0:
-    #     missing_network = "\n".join([str(row.program_network_id) for row in non_join_network.collect()])
-    #     raise Exception(f"Network missing: {missing_network}")
+    def join_tables():
+        _tenants_df = create_tenant_df()
+        _network_df = (read_df_from_postgres("mediaocean.network")
+                       .withColumnRenamed("id", "network_id")
+                       .withColumnRenamed("mo_id", "network_mo_id")
+                       .select("network_id", "network_mo_id"))
+        _tenant_join_df = program_df.join(_tenants_df, F.col("tenant") == F.col("tenant_mo_id"), "left_outer")
+        _non_joined_tenant = _tenant_join_df.filter(F.col("tenant_id").isNull()).select("tenant").distinct()
+        if len(_non_joined_tenant.take(1)) > 0:
+            _missing_tenant_files = "\n".join([str(row.tenant_mo_id) for row in _non_joined_tenant.collect()])
+            raise Exception(f"Tenants missing: {_missing_tenant_files}")
+        else:
+            _network_join_df = _tenant_join_df.join(_network_df, F.col("program_network_id") == F.col("network_mo_id"), "left_outer")
+            return _network_join_df
 
     w = create_window(window_cols)
-    network_final_df = (network_join_df
+    first_df = join_tables()
+    non_join_network = first_df.filter(F.col("network_id").isNull())
+
+    if len(non_join_network.take(1)) > 0:
+        # janky short term solution
+        missing_networks = (non_join_network
+                            .select("tenant_id", "program_network_id", "program_media", "extract_datetime")
+                            .withColumn("name", F.lit("N/A"))
+                            .withColumn("nielsen_code", F.lit("N"))
+                            .withColumn("network_type", F.lit("S"))
+                            .withColumnRenamed("program_media", "media")
+                            .withColumnRenamed("program_network_id", "mo_id")
+                            .withColumn("rn", F.row_number().over(w))
+                            .filter(F.col("rn") == 1)
+                            .drop("extract_datetime", "rn"))
+        missing_networks.show()
+        write_df_to_postgres(missing_networks, "mediaocean.network", 5)
+
+    second_df = join_tables()
+    second_df.cache()
+    second_df.show()
+    program_final_df = (second_df
                         .filter(F.col("network_id").isNotNull())
                         .withColumnRenamed("program_name", "name")
                         .withColumnRenamed("program_media", "media")
@@ -321,7 +340,7 @@ def run_program_feed(program_files):
                         .withColumn("rn", F.row_number().over(w))
                         .filter(F.col("rn") == 1)
                         .select(*program_cols))
-    write_df_to_postgres(network_final_df, "mediaocean.program")
+    write_df_to_postgres(program_final_df, "mediaocean.program")
 
 
 # need this temporarily until spark can read directly from efs
@@ -610,7 +629,7 @@ def create_program_df_from_sftp_file(files):
         F.col("programs.name").alias("program_name"),
         F.col("programs.networkId").alias("program_network_id"),
         F.col("programs.endDate").alias("program_end_date"),
-        F.col("programs.media").alias("program_start_date"),
+        F.col("programs.startDate").alias("program_start_date"),
         F.col("programs.media").alias("program_media")
     ]
     return functools.reduce(DataFrame.unionAll, list(map(lambda f: create_df(program_schema, f, explode_cols, select_cols), files)))
@@ -636,8 +655,11 @@ def write_df_to_postgres(df, jdbc_table, num_partitions=20):
      .jdbc(url=url, table=jdbc_table, mode="append", properties=properties))
 
 
-def read_df_from_postgres(jdbc_table, num_partitions=1):
-    return spark_session.read.jdbc(url=url, properties=properties, table=jdbc_table, numPartitions=num_partitions)
+def read_df_from_postgres(jdbc_table, num_partitions=0):
+    if num_partitions:
+        return spark_session.read.jdbc(url=url, properties=properties, table=jdbc_table, numPartitions=num_partitions)
+    else:
+        return spark_session.read.jdbc(url=url, properties=properties, table=jdbc_table)
 
 
 if __name__ == "__main__":
